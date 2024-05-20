@@ -1,0 +1,193 @@
+#!/usr/bin/env python3
+
+import questionary
+import os
+
+print("\n  Hello, Welcome to Makefiler!\n")
+
+lib_or_app = questionary.select(
+	"Are you creating a library or an application?",
+	choices=[
+		"Library",
+		"Application"
+	]
+).ask()
+
+lang = questionary.select("Which language are you using?", choices=["C", "Cpp"]).ask()
+compiler = questionary.select("Which compiler are you using?", choices=["GCC", "Clang"]).ask()
+std = None
+if lang == "C":
+	std = questionary.select("Which C standard are you using?", choices=["-std=c99","-std=c11", "None"]).ask()
+elif lang == "Cpp":
+	std = questionary.select("Which C++ standard are you using?", choices=["-std=c++11","-std=c++14","-std=c++17","-std=c++20", "None"]).ask()
+
+if std == "None":
+	std = ""
+
+flags = questionary.checkbox("What flags are you using?", choices=["-Wall", "-Wextra", "-Werror", "-pedantic", "-pthread", "-g"]).ask()
+
+if lib_or_app == "Library":
+	name = questionary.text("What is the name of your library?").ask()
+	flags.extend(questionary.checkbox("What flags do you want to add to your library?", choices=["-fPIC", "-shared", "-static"]).ask())
+	test_file = questionary.confirm("Do you want to create a test file?").ask()
+	if test_file:
+		valgrind = questionary.confirm("Do you want to use valgrind?").ask()
+elif lib_or_app == "Application":
+	name = questionary.text("What is the name of your application?").ask()
+else:
+	raise ValueError("Invalid selection")
+
+make_only_or_project = questionary.select("Do you want to create a Makefile only or start a project?", ["Makefile only", "Project"]).ask()
+
+path = questionary.select("Create Makefile here or create a folder?", ["Create here", f"Create {name} folder"]).ask()
+
+if (path == "Create here"):
+	path = os.getcwd()
+else:
+	path = os.path.join(os.getcwd(), name)
+	os.mkdir(path)
+
+makefile = open(os.path.join(path, "Makefile"), "w")
+makefile.write(f"""
+NAME = {name}
+CC = @{compiler.lower()}
+FLAGS = {' '.join(flags)} {std} $(INCLUDES)
+
+includefolder = includes/
+INCLUDES = -I $(includefolder)
+
+SRC_FOLDER = src/
+OBJ_DIR = obj/
+
+SRC_ROOT_FILES = main.c{"pp" if lang == "Cpp" else ""}
+#Example of a folder inside src
+#UTILS_FOLDER_FILES = utils.c{"pp" if lang == "Cpp" else ""} map.c{"pp" if lang == "Cpp" else ""}
+
+INCLUDE_HEADERS = $(addprefix $(includefolder), {chr(92)}
+	{name}.h{"pp" if lang == "Cpp" else ""} {chr(92)}
+)
+
+FILES = {chr(92)}
+	$(SRC_ROOT_FILES) {chr(92)}
+	#Example how to add folders
+#$(addprefix utils/, $(UTILS_FOLDER_FILES))
+
+{f"LIB_DIR = lib/{chr(10)}LIB_FILE = $(LIB_DIR)lib$(NAME).a" if lib_or_app == "Library" else ""}
+OBJS = $(addprefix $(OBJ_DIR), $(FILES:%.c{"pp" if lang == "Cpp" else ""}=%.o))
+
+# Reset
+Color_Off='\033[0m'       # Text Reset
+
+IRed='\033[0;91m'         # Red
+IGreen='\033[0;92m'       # Green
+IYellow='\033[0;93m'      # Yellow
+ICyan='\033[0;96m'        # Cyan
+
+MSG1 = @echo {"${" + "IGreen}"}"Compiled Successfully ✔︎"{"${" + "Color_Off}"}
+MSG2 = @echo {"${" + "IYellow}"}"Cleaned Successfully ✔︎"{"${" + "Color_Off}"}
+MSG3 = @echo {"${" + "ICyan}"}"Cleaned {"${" + "NAME}"} Successfully ✔︎"{"${" + "Color_Off}"}
+
+all: $({"NAME" if lib_or_app == "Application" else "LIB_FILE"})
+""")
+if lib_or_app == "Library":
+    makefile.write("""
+$(LIB_FILE): $(OBJS)
+	@mkdir -p $(LIB_DIR)
+	@ar rcs $(LIB_FILE) $(OBJS)
+	$(MSG1)
+""")
+elif lib_or_app == "Application":
+	makefile.write("""
+$(NAME): $(OBJS)
+	@$(CC) $(FLAGS) $(OBJS) -o $(NAME)
+	$(MSG1)
+""")
+
+makefile.write(f"""
+
+$(OBJS): $(OBJ_DIR)%.o: $(SRC_FOLDER)%.c{"pp" if lang == "Cpp" else ""} $(INCLUDE_HEADERS)
+	@mkdir -p $(OBJ_DIR) $(dir $@)
+	@$(CC) $(FLAGS) -o $@ -c $<
+""")
+
+makefile.write(f"""
+clean:
+	@/bin/rm -rf $(OBJ_DIR)
+	$(MSG2)
+
+fclean: clean
+	@/bin/rm -rf $(NAME) {"${"+"OBJ_DIR}"}
+	$(MSG3)
+
+re: fclean all
+
+""")
+
+if lib_or_app == "Library" and test_file:
+    makefile.write(f"""
+TEST_FILE = test.c{"pp" if lang == "Cpp" else ""}
+TEST_DIR = test/
+TEST_EXE = $(TEST_DIR)test
+
+link_test: $(LIB_FILE)
+	@$(CC) $(FLAGS) -o TEST_EXE $(TEST_DIR)$(TEST_FILE) -L$(LIB_DIR) -l$(NAME)
+
+test: link_test
+	@./$(TEST_EXE)
+
+""")
+    if (valgrind):
+        makefile.write(f"""
+run_grind:
+	@valgrind ./$(TEST_EXE)
+ 
+test_grind: link_test run_grind
+
+""")
+        with open(os.path.join(path, ".valgrindrc"), "w") as f:
+            f.write("""
+--leak-check=full
+--show-leak-kinds=all
+--track-origins=yes
+""")
+        
+os.mkdir(os.path.join(path, "src"))
+os.mkdir(os.path.join(path, "includes"))
+include_file = open(os.path.join(path, "includes", f"{name}.h"), "w")
+include_file.write(f"#pragma once\n")
+include_file.close()
+if lib_or_app == "Library" and test_file:
+	os.mkdir(os.path.join(path, "test"))
+	test_file = open(os.path.join(os.path.join(path, "test"), f"""test.c{"pp" if lang == "Cpp" else ""}"""), "w")
+	test_file.write(f"""
+#include <{"stdio.h" if lang == "C" else "iostream"}>
+#include <{name}.h>
+
+int main(int argc, char **argv) {"{"}
+	(void)argc;
+ 	(void)argv;
+	// Test your library here !!
+	{"std::cout << \"Hello, World!\" << std::endl;" if lang == "Cpp" else "printf(\"Hello, World!\\n\");"}
+ 	return 0;
+{"}"}
+""")
+	test_file.close()
+makefile.close()
+
+main_file = open(os.path.join(path, "src", f"""main.c{"pp" if lang == "Cpp" else ""}"""), "w")
+main_file.write(f"""
+#include <{"stdio.h" if lang == "C" else "iostream"}>
+#include <{name}.h>
+
+int main(int argc, char **argv) {"{"}
+	(void)argc;
+ 	(void)argv;
+  
+	{"std::cout << \"Hello, World!\" << std::endl;" if lang == "Cpp" else "printf(\"Hello, World!\\n\");"}
+	return 0;
+{"}"}
+
+""")
+main_file.close()
+
+
